@@ -1,6 +1,6 @@
-import argparse
 """Utility for exporting Klantenvertellen reviews to an Excel file."""
 
+import argparse
 import json
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional
@@ -147,31 +147,47 @@ def _fetch_page(session: requests.Session, url: str, page: int) -> Optional[str]
     return response.text
 
 
+def _has_next_page(soup: BeautifulSoup) -> bool:
+    """Determine if a subsequent page of reviews is available."""
+
+    # Common patterns: rel="next" link tags, pagination components with an active "next" link
+    if soup.select_one("link[rel=next], a[rel=next]"):
+        return True
+
+    next_buttons = soup.select(".pagination .next, .pager .next, a[aria-label='Next']")
+    for button in next_buttons:
+        if isinstance(button, Tag) and "disabled" not in button.get("class", []):
+            return True
+
+    return False
+
+
 def scrape_reviews(url: str, max_pages: int = 10) -> List[Review]:
     """Fetch reviews from the provided Klantenvertellen review URL."""
-    session = requests.Session()
-    session.headers.update(_default_headers())
-
     all_reviews: List[Review] = []
-    for page in range(1, max_pages + 1):
-        try:
-            html = _fetch_page(session, url, page)
-        except requests.RequestException:
-            break
 
-        soup = BeautifulSoup(html, "html.parser")
-        current_reviews = _parse_ld_json(soup)
-        if not current_reviews:
-            current_reviews = _parse_dom_reviews(soup)
+    with requests.Session() as session:
+        session.headers.update(_default_headers())
 
-        if not current_reviews:
-            break
+        for page in range(1, max_pages + 1):
+            try:
+                html = _fetch_page(session, url, page)
+            except requests.RequestException:
+                break
 
-        all_reviews.extend(current_reviews)
+            soup = BeautifulSoup(html, "html.parser")
+            current_reviews = _parse_ld_json(soup)
+            if not current_reviews:
+                current_reviews = _parse_dom_reviews(soup)
 
-        if len(current_reviews) < 10:
-            # Heuristic: last page likely reached
-            break
+            if not current_reviews:
+                break
+
+            all_reviews.extend(current_reviews)
+
+            # Prefer explicit pagination signals; fall back to item count heuristics
+            if not _has_next_page(soup) or len(current_reviews) < 10:
+                break
 
     return all_reviews
 
